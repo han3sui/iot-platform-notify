@@ -43,8 +43,33 @@ type appSender struct {
 	tokenExpires time.Time
 }
 
-// Send 发送钉钉工作通知文本消息；To 为钉钉 userid（多个用 , 分隔）
+// dingtalkTokenInvalid 钉钉 access_token 失效类错误码：
+// 40014 不合法的 token、42001 token 过期、40001 获取 token 的凭证非法
+func dingtalkTokenInvalid(errcode int) bool {
+	return errcode == 40014 || errcode == 42001 || errcode == 40001
+}
+
+// Send 发送钉钉工作通知文本消息；To 为钉钉 userid（多个用 , 分隔）。
+// token 失效时清空缓存并重试一次（实例被 NewCached 复用，本地缓存可能滞后于钉钉侧失效）。
 func (s *appSender) Send(ctx context.Context, req *notify.SendRequest) (*notify.Result, error) {
+	result, err := s.sendOnce(ctx, req)
+	if err != nil && result != nil && dingtalkTokenInvalid(result.errcode) {
+		s.invalidateToken()
+		result, err = s.sendOnce(ctx, req)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &notify.Result{MessageID: strconv.FormatInt(result.taskId, 10)}, nil
+}
+
+// sendResult 单次发送的渠道方响应（errcode 用于 token 失效判定）
+type sendResult struct {
+	errcode int
+	taskId  int64
+}
+
+func (s *appSender) sendOnce(ctx context.Context, req *notify.SendRequest) (*sendResult, error) {
 	token, err := s.getAccessToken(ctx)
 	if err != nil {
 		return nil, err
@@ -87,9 +112,17 @@ func (s *appSender) Send(ctx context.Context, req *notify.SendRequest) (*notify.
 		return nil, fmt.Errorf("%w: dingtalk/app: decode response failed: %v", notify.ErrSend, err)
 	}
 	if result.Errcode != 0 {
-		return nil, fmt.Errorf("%w: dingtalk/app: code %d, %s", notify.ErrSend, result.Errcode, result.Errmsg)
+		return &sendResult{errcode: result.Errcode},
+			fmt.Errorf("%w: dingtalk/app: code %d, %s", notify.ErrSend, result.Errcode, result.Errmsg)
 	}
-	return &notify.Result{MessageID: strconv.FormatInt(result.TaskId, 10)}, nil
+	return &sendResult{taskId: result.TaskId}, nil
+}
+
+// invalidateToken 清空本地 token 缓存，下次发送强制重新获取
+func (s *appSender) invalidateToken() {
+	s.mu.Lock()
+	s.accessToken = ""
+	s.mu.Unlock()
 }
 
 // getAccessToken 获取钉钉访问令牌（提前 5 分钟过期，并发安全）

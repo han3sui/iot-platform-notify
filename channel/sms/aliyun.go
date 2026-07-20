@@ -13,6 +13,7 @@ import (
 
 	notify "github.com/han3sui/iot-platform-notify"
 	"github.com/han3sui/iot-platform-notify/internal/cloudsign"
+	"github.com/han3sui/iot-platform-notify/internal/tplparams"
 )
 
 func init() {
@@ -48,7 +49,9 @@ type aliyunSender struct {
 	config AliyunConfig
 }
 
-// Send 调用阿里云 SendSms；模板变量固定为 {"content": Content}，与基座行为一致
+// Send 调用阿里云 SendSms。
+// 模板变量优先取 Extra["templateParams"]（JSON 对象，命名参数），
+// 未提供时回退为 {"content": Content}（与基座旧行为一致）。
 func (s *aliyunSender) Send(ctx context.Context, req *notify.SendRequest) (*notify.Result, error) {
 	signName := req.GetExtra("signName", s.config.SignName)
 	templateCode := req.GetExtra("templateCode", s.config.TemplateCode)
@@ -56,7 +59,16 @@ func (s *aliyunSender) Send(ctx context.Context, req *notify.SendRequest) (*noti
 		return nil, fmt.Errorf("%w: sms/aliyun: signName and templateCode are required", notify.ErrConfig)
 	}
 
-	tplParam, _ := json.Marshal(map[string]string{"content": req.Content})
+	named, err := tplparams.ParseNamed(req.GetExtra("templateParams", ""))
+	if err != nil {
+		return nil, fmt.Errorf("%w: sms/aliyun: %v", notify.ErrConfig, err)
+	}
+	var tplParam []byte
+	if named != nil {
+		tplParam, _ = json.Marshal(named)
+	} else {
+		tplParam, _ = json.Marshal(map[string]string{"content": req.Content})
+	}
 	params := map[string]string{
 		"AccessKeyId":      s.config.AccessKeyId,
 		"Action":           "SendSms",

@@ -12,6 +12,7 @@ import (
 
 	notify "github.com/han3sui/iot-platform-notify"
 	"github.com/han3sui/iot-platform-notify/internal/cloudsign"
+	"github.com/han3sui/iot-platform-notify/internal/tplparams"
 )
 
 func init() {
@@ -47,14 +48,25 @@ type aliyunSender struct {
 	config AliyunConfig
 }
 
-// Send 调用阿里云 SingleCallByTts；TTS 变量固定为 {"message": Content}，与基座行为一致
+// Send 调用阿里云 SingleCallByTts。
+// TTS 变量优先取 Extra["templateParams"]（JSON 对象，命名参数），
+// 未提供时回退为 {"message": Content}（与基座旧行为一致）。
 func (s *aliyunSender) Send(ctx context.Context, req *notify.SendRequest) (*notify.Result, error) {
 	ttsCode := req.GetExtra("ttsCode", s.config.TtsCode)
 	if ttsCode == "" {
 		return nil, fmt.Errorf("%w: phone/aliyun: ttsCode is required", notify.ErrConfig)
 	}
 
-	ttsParam, _ := json.Marshal(map[string]string{"message": req.Content})
+	named, err := tplparams.ParseNamed(req.GetExtra("templateParams", ""))
+	if err != nil {
+		return nil, fmt.Errorf("%w: phone/aliyun: %v", notify.ErrConfig, err)
+	}
+	var ttsParam []byte
+	if named != nil {
+		ttsParam, _ = json.Marshal(named)
+	} else {
+		ttsParam, _ = json.Marshal(map[string]string{"message": req.Content})
+	}
 	params := map[string]string{
 		"AccessKeyId":      s.config.AccessKeyId,
 		"Action":           "SingleCallByTts",

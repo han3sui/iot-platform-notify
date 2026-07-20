@@ -62,6 +62,17 @@ result, err := sender.Send(ctx, &notify.SendRequest{
 
 短信/语音的模板参数（`signName`/`templateId`/`templateCode`/`ttsCode` 等）可放在渠道 config 里，也可通过 `SendRequest.Extra` 按次覆盖。
 
+### 结构化模板参数（Extra["templateParams"]）
+
+短信/语音渠道支持多参数模板，通过 `Extra["templateParams"]` 传 JSON 字符串：
+
+| 渠道 | 参数形态 | 示例 |
+|------|----------|------|
+| `sms/aliyun`、`phone/aliyun` | **命名参数**（JSON 对象，key 对应模板占位符名） | `{"device":"逆变器A","temp":"80"}` |
+| `sms/huawei`、`sms/tencent`、`phone/huawei`、`phone/tencent` | **位置参数**（JSON 数组，顺序对应模板 {1}{2}...） | `["逆变器A","80"]` |
+
+未提供 `templateParams` 时回退旧行为：阿里云短信 `{"content": Content}`、阿里云语音 `{"message": Content}`、华为/腾讯 `[Content]`。格式不符（如给位置参数渠道传了对象）返回 `ErrConfig`。
+
 ### 与基座中文枚举的映射
 
 基座 `notify_channel` 表使用中文枚举（如 `微信` + `企业微信应用消息`），可用 `notify.LegacyMap(deliveryType, serviceProvider)` 转为新包的 channel/provider key，无需 DB 迁移。
@@ -111,7 +122,7 @@ _ = q.Ack(ctx, msgs[0].ID)
 ## 已知注意事项
 
 - 腾讯云短信/邮件/语音按官方 TC3-HMAC-SHA256 v3 API 实现（基座旧代码使用已下线的 v2 接口或存在签名错误，本包已重写），**首次接入需用真实凭证验证**
-- 企微/钉钉应用消息的 access_token 缓存在 Sender 实例内，请通过 `NewCached` 或自行复用实例
+- 企微/钉钉应用消息的 access_token 缓存在 Sender 实例内，请通过 `NewCached` 或自行复用实例；渠道方返回 token 失效错误码时会自动清缓存并重试一次
 - 自建邮箱（gomail）不支持 ctx 取消
 
 ## 版本

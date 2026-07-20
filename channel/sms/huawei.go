@@ -11,6 +11,7 @@ import (
 
 	notify "github.com/han3sui/iot-platform-notify"
 	"github.com/han3sui/iot-platform-notify/internal/cloudsign"
+	"github.com/han3sui/iot-platform-notify/internal/tplparams"
 )
 
 func init() {
@@ -49,8 +50,10 @@ type huaweiHTTPResult struct {
 	} `json:"result"`
 }
 
-// Send 调用华为云 batchSendSms；模板参数为 [Content]，与基座行为一致。
-// 基座返回 []HuaweiNotifyResult 由调用方判断 Status，此处收敛：任一 Status != "000000" 即失败。
+// Send 调用华为云 batchSendSms。
+// 模板参数优先取 Extra["templateParams"]（JSON 数组，位置参数），
+// 未提供时回退为 [Content]（与基座旧行为一致）。
+// 发送结果收敛：任一 Status != "000000" 即失败。
 func (s *huaweiSender) Send(ctx context.Context, req *notify.SendRequest) (*notify.Result, error) {
 	from := req.GetExtra("from", s.config.From)
 	templateId := req.GetExtra("templateId", s.config.TemplateId)
@@ -58,7 +61,13 @@ func (s *huaweiSender) Send(ctx context.Context, req *notify.SendRequest) (*noti
 		return nil, fmt.Errorf("%w: sms/huawei: from and templateId are required", notify.ErrConfig)
 	}
 
-	templateParams := []string{req.Content}
+	templateParams, err := tplparams.ParsePositional(req.GetExtra("templateParams", ""))
+	if err != nil {
+		return nil, fmt.Errorf("%w: sms/huawei: %v", notify.ErrConfig, err)
+	}
+	if templateParams == nil {
+		templateParams = []string{req.Content}
+	}
 	templateParasJSON, _ := json.Marshal(templateParams)
 
 	values := url.Values{}

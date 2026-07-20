@@ -10,6 +10,7 @@ import (
 
 	notify "github.com/han3sui/iot-platform-notify"
 	"github.com/han3sui/iot-platform-notify/internal/cloudsign"
+	"github.com/han3sui/iot-platform-notify/internal/tplparams"
 )
 
 func init() {
@@ -45,6 +46,16 @@ func (s *huaweiSender) Send(ctx context.Context, req *notify.SendRequest) (*noti
 		return nil, fmt.Errorf("%w: phone/huawei: templateId is required", notify.ErrConfig)
 	}
 
+	// TTS 参数优先取 Extra["templateParams"]（JSON 数组），未提供时回退为 [Content]
+	templateParams, err := tplparams.ParsePositional(req.GetExtra("templateParams", ""))
+	if err != nil {
+		return nil, fmt.Errorf("%w: phone/huawei: %v", notify.ErrConfig, err)
+	}
+	if templateParams == nil {
+		templateParams = []string{req.Content}
+	}
+	ttsParamJSON, _ := json.Marshal(templateParams)
+
 	payload := map[string]interface{}{
 		"call_type":          "VOICE_TTS",
 		"caller":             s.config.CallFrom,
@@ -52,7 +63,7 @@ func (s *huaweiSender) Send(ctx context.Context, req *notify.SendRequest) (*noti
 		"display_name":       "告警通知",
 		"status_callback":    "",
 		"tts_template_id":    templateId,
-		"tts_template_param": fmt.Sprintf("[%q]", req.Content),
+		"tts_template_param": string(ttsParamJSON),
 	}
 	jsonData, err := json.Marshal(payload)
 	if err != nil {

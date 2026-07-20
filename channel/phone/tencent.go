@@ -13,6 +13,7 @@ import (
 
 	notify "github.com/han3sui/iot-platform-notify"
 	"github.com/han3sui/iot-platform-notify/internal/cloudsign"
+	"github.com/han3sui/iot-platform-notify/internal/tplparams"
 )
 
 const (
@@ -71,7 +72,8 @@ type tencentVMSResponse struct {
 	} `json:"Response"`
 }
 
-// Send 调用腾讯云 VMS SendTtsVoice（TC3-HMAC-SHA256，签名 payload 与 body 严格一致）
+// Send 调用腾讯云 VMS SendTtsVoice（TC3-HMAC-SHA256，签名 payload 与 body 严格一致）。
+// TTS 参数优先取 Extra["templateParams"]（JSON 数组），未提供时回退为 [Content]。
 func (s *tencentSender) Send(ctx context.Context, req *notify.SendRequest) (*notify.Result, error) {
 	templateId := req.GetExtra("templateId", s.config.TemplateId)
 	if templateId == "" {
@@ -84,9 +86,17 @@ func (s *tencentSender) Send(ctx context.Context, req *notify.SendRequest) (*not
 		}
 	}
 
+	templateParams, err := tplparams.ParsePositional(req.GetExtra("templateParams", ""))
+	if err != nil {
+		return nil, fmt.Errorf("%w: phone/tencent: %v", notify.ErrConfig, err)
+	}
+	if templateParams == nil {
+		templateParams = []string{req.Content}
+	}
+
 	body := map[string]interface{}{
 		"TemplateId":       templateId,
-		"TemplateParamSet": []string{req.Content},
+		"TemplateParamSet": templateParams,
 		"CalledNumber":     normalizePhone(req.To),
 		"VoiceSdkAppid":    s.config.AppId,
 		"PlayTimes":        playTimes,

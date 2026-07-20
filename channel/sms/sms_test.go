@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -129,6 +130,87 @@ func TestTencentSendTC3(t *testing.T) {
 	// 号码应补 +86 前缀
 	if !strings.Contains(gotBody, `"+8613800138000"`) {
 		t.Errorf("body = %s", gotBody)
+	}
+}
+
+func TestAliyunNamedTemplateParams(t *testing.T) {
+	// 命名参数（JSON 对象）应原样作为 TemplateParam 传给阿里云
+	var gotQuery string
+	channeltest.Intercept(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		fmt.Fprint(w, `{"Code":"OK","BizId":"b1"}`)
+	})
+	s, _ := notify.New(notify.ChannelSMS, notify.ProviderAliyun,
+		json.RawMessage(`{"accessKeyId":"ak","accessKeySecret":"sk","signName":"x","templateCode":"y"}`))
+	_, err := s.Send(context.Background(), &notify.SendRequest{
+		To:      "13800138000",
+		Content: "fallback",
+		Extra:   map[string]string{"templateParams": `{"device":"A","temp":"80"}`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// query 是 URL 编码的，检查解码后的关键内容
+	decoded, _ := url.QueryUnescape(gotQuery)
+	if !strings.Contains(decoded, `"device":"A"`) || !strings.Contains(decoded, `"temp":"80"`) {
+		t.Errorf("TemplateParam not passed through: %s", decoded)
+	}
+}
+
+func TestTencentPositionalTemplateParams(t *testing.T) {
+	// 位置参数（JSON 数组）应逐元素传给腾讯云，而非拼接成单元素
+	var gotBody string
+	channeltest.Intercept(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		fmt.Fprint(w, `{"Response":{"SendStatusSet":[{"SerialNo":"sn","Code":"Ok"}]}}`)
+	})
+	s, _ := notify.New(notify.ChannelSMS, notify.ProviderTencent,
+		json.RawMessage(`{"secretId":"s","secretKey":"k","appId":"1","signName":"x","templateId":"y"}`))
+	_, err := s.Send(context.Background(), &notify.SendRequest{
+		To:    "13800138000",
+		Extra: map[string]string{"templateParams": `["设备A","80"]`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotBody, `"TemplateParamSet":["设备A","80"]`) {
+		t.Errorf("positional params lost: %s", gotBody)
+	}
+}
+
+func TestHuaweiPositionalTemplateParams(t *testing.T) {
+	var gotBody string
+	channeltest.Intercept(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		fmt.Fprint(w, `{"code":"000000","result":[{"smsMsgId":"m","status":"000000"}]}`)
+	})
+	s, _ := notify.New(notify.ChannelSMS, notify.ProviderHuawei,
+		json.RawMessage(`{"endpoint":"https://x","accessKeyId":"a","accessKeySecret":"s","from":"f","templateId":"t"}`))
+	_, err := s.Send(context.Background(), &notify.SendRequest{
+		To:    "138",
+		Extra: map[string]string{"templateParams": `["设备A","80"]`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, _ := url.QueryUnescape(gotBody)
+	if !strings.Contains(decoded, `["设备A","80"]`) {
+		t.Errorf("positional params lost: %s", decoded)
+	}
+}
+
+func TestTencentInvalidTemplateParams(t *testing.T) {
+	// 非法 JSON 应返回 ErrConfig 而非静默发错内容
+	s, _ := notify.New(notify.ChannelSMS, notify.ProviderTencent,
+		json.RawMessage(`{"secretId":"s","secretKey":"k","appId":"1","signName":"x","templateId":"y"}`))
+	_, err := s.Send(context.Background(), &notify.SendRequest{
+		To:    "138",
+		Extra: map[string]string{"templateParams": `{"not":"array"}`},
+	})
+	if !errors.Is(err, notify.ErrConfig) {
+		t.Errorf("expected ErrConfig, got %v", err)
 	}
 }
 

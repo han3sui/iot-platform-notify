@@ -12,6 +12,7 @@ import (
 
 	notify "github.com/han3sui/iot-platform-notify"
 	"github.com/han3sui/iot-platform-notify/internal/cloudsign"
+	"github.com/han3sui/iot-platform-notify/internal/tplparams"
 )
 
 const (
@@ -68,7 +69,9 @@ type tencentSMSResponse struct {
 	} `json:"Response"`
 }
 
-// Send 调用腾讯云 SendSms（TC3-HMAC-SHA256），模板参数为 [Content]
+// Send 调用腾讯云 SendSms（TC3-HMAC-SHA256）。
+// 模板参数优先取 Extra["templateParams"]（JSON 数组，位置参数），
+// 未提供时回退为 [Content]。
 func (s *tencentSender) Send(ctx context.Context, req *notify.SendRequest) (*notify.Result, error) {
 	signName := req.GetExtra("signName", s.config.SignName)
 	templateId := req.GetExtra("templateId", s.config.TemplateId)
@@ -76,12 +79,20 @@ func (s *tencentSender) Send(ctx context.Context, req *notify.SendRequest) (*not
 		return nil, fmt.Errorf("%w: sms/tencent: signName and templateId are required", notify.ErrConfig)
 	}
 
+	templateParams, err := tplparams.ParsePositional(req.GetExtra("templateParams", ""))
+	if err != nil {
+		return nil, fmt.Errorf("%w: sms/tencent: %v", notify.ErrConfig, err)
+	}
+	if templateParams == nil {
+		templateParams = []string{req.Content}
+	}
+
 	body := map[string]interface{}{
 		"PhoneNumberSet":   []string{normalizePhone(req.To)},
 		"SmsSdkAppId":      s.config.AppId,
 		"SignName":         signName,
 		"TemplateId":       templateId,
-		"TemplateParamSet": []string{req.Content},
+		"TemplateParamSet": templateParams,
 	}
 	jsonData, err := json.Marshal(body)
 	if err != nil {
